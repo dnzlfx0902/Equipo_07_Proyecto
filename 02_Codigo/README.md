@@ -22,7 +22,7 @@ Desde la carpeta `02_Codigo` en Windows:
 ```bat
 python main.py
 ```
-Escribe `ayuda` para ver todos los comandos y `salir` para terminar.
+Escribe `help` para ver los comandos, `crear --help` (o `modificar --help`, `borrar --help`, `listar --help`) para consultar su uso y `salir` para terminar.
 Usa comillas para rutas o nombres con espacios.
 
 ```text

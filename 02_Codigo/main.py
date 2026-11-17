@@ -8,21 +8,14 @@ import tempfile
 
 USUARIOS = os.path.join(os.path.dirname(os.path.abspath(__file__)), "usuarios.json")
 
-AYUDA = """Comandos (usa comillas para nombres con espacios):
-  crear archivo RUTA       Crea un archivo vacío, sin sobrescribirlo
-  modificar archivo RUTA   Sustituye el contenido de un archivo de texto
-  borrar archivo RUTA      Elimina un archivo, previa confirmación
-  crear carpeta RUTA       Crea una carpeta
-  modificar carpeta RUTA NUEVA_RUTA  Renombra o mueve una carpeta
-  borrar carpeta RUTA     Elimina una carpeta vacía, previa confirmación
-  crear usuario NOMBRE     Crea un usuario simulado
-  modificar usuario NOMBRE NUEVO_NOMBRE  Renombra un usuario simulado
-  borrar usuario NOMBRE   Elimina un usuario simulado, previa confirmación
-  listar usuarios          Muestra los usuarios simulados
-  ayuda                    Muestra estos comandos
-  salir                    Cierra la terminal
-Las rutas relativas se resuelven desde la carpeta donde se ejecuta el programa.
-"""
+AYUDAS = {
+    "crear": "Crea un archivo vacío, una carpeta o un usuario simulado.\nUso: crear archivo|carpeta|usuario NOMBRE",
+    "modificar": "Reemplaza el contenido de un archivo o cambia el nombre de una carpeta o usuario.\nUso: modificar archivo RUTA | modificar carpeta|usuario NOMBRE NUEVO_NOMBRE",
+    "borrar": "Borra un archivo, una carpeta vacía o un usuario simulado, previa confirmación.\nUso: borrar archivo|carpeta|usuario NOMBRE",
+    "listar": "Muestra los usuarios simulados.\nUso: listar usuarios",
+    "salir": "Cierra la terminal.\nUso: salir",
+    "help": "Muestra los comandos disponibles.\nUso: help | COMANDO --help",
+}
 
 
 def cargar_usuarios():
@@ -59,15 +52,19 @@ def ejecutar(partes):
         return True
     if partes == ["salir"]:
         return False
-    if partes == ["ayuda"]:
-        print(AYUDA)
+    if partes == ["help"]:
+        print("Comandos: " + ", ".join(AYUDAS))
+        print("Escribe COMANDO --help para conocer su uso.")
+        return True
+    if len(partes) == 2 and partes[1] == "--help" and partes[0] in AYUDAS:
+        print(AYUDAS[partes[0]])
         return True
     if partes == ["listar", "usuarios"]:
         usuarios = cargar_usuarios()
         print("\n".join(usuarios) if usuarios else "No hay usuarios.")
         return True
     if len(partes) < 3:
-        raise ValueError("Comando incompleto. Escribe ayuda para ver los comandos.")
+        raise ValueError("Comando incompleto. Escribe help para ver los comandos.")
 
     accion, tipo, *argumentos = partes
     if tipo == "archivo" and len(argumentos) == 1:
@@ -90,7 +87,7 @@ def ejecutar(partes):
                 return True
             os.remove(ruta)
         else:
-            raise ValueError("Acción desconocida. Escribe ayuda.")
+            raise ValueError("Acción desconocida. Escribe help.")
     elif tipo == "carpeta":
         if accion == "crear" and len(argumentos) == 1:
             os.mkdir(argumentos[0])
@@ -107,10 +104,10 @@ def ejecutar(partes):
                 return True
             os.rmdir(argumentos[0])
         else:
-            raise ValueError("Comando de carpeta incorrecto. Escribe ayuda.")
+            raise ValueError("Comando de carpeta incorrecto. Escribe help.")
     elif tipo == "usuario":
         if accion not in ("crear", "modificar", "borrar") or len(argumentos) != (2 if accion == "modificar" else 1):
-            raise ValueError("Comando de usuario incorrecto. Escribe ayuda.")
+            raise ValueError("Comando de usuario incorrecto. Escribe help.")
         if any(not nombre.strip() for nombre in argumentos):
             raise ValueError("El nombre de usuario no puede estar vacío")
         usuarios = cargar_usuarios()
@@ -133,16 +130,16 @@ def ejecutar(partes):
                 usuarios.remove(nombre)
         guardar_usuarios(usuarios)
     else:
-        raise ValueError("Comando desconocido. Escribe ayuda.")
+        raise ValueError("Comando desconocido. Escribe help.")
     print("Operación completada.")
     return True
 
 
 def main():
-    print("Mini terminal. Escribe ayuda para ver los comandos.")
+    print("Escribe help para ver los comandos.")
     while True:
         try:
-            linea = input("mini> ")
+            linea = input("> ")
             # posix=False conserva las barras inversas de las rutas de Windows.
             partes = shlex.split(linea, posix=False)
             partes = [p[1:-1] if len(p) >= 2 and p[0] in "\"'" and p[-1] == p[0] else p for p in partes]
