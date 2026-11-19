@@ -393,7 +393,8 @@ def ejecutar(accion, entidad, parametro, arbol=None):
         print("Operación completada.")
         return
     ruta = ruta_sandbox(parametro)
-    if os.path.normpath(ruta) == os.path.normpath(USUARIOS) and accion in ("borrar", "editar"):
+    # usuarios.json es dato interno: solo lectura; cualquier acción que escriba falla cerrado
+    if os.path.normpath(ruta) == os.path.normpath(USUARIOS) and accion not in ("buscar", "inspeccionar"):
         raise ErrorSemantico(f"{parametro} es un dato interno protegido")
     if entidad == "archivo":
         return operar_archivo(accion, parametro, ruta)
