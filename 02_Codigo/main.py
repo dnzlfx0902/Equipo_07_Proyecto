@@ -1,8 +1,20 @@
 """Mini terminal de teoría computacional.
 
-Cubre tres capas: léxico con expresiones regulares, un AFD explícito para la
-forma de los comandos simples y un autómata de pila para las jerarquías de
-carpetas. Todos los efectos quedan dentro de entorno_windows/.
+El programa recorre tres capas de la teoría de lenguajes formales:
+
+1. Léxico (expresiones regulares). Las tres regex de ``REGEX_*`` deciden si una
+   palabra pertenece a cada categoría, y el alfabeto Sigma se valida carácter a
+   carácter junto con la separación por un único espacio.
+2. Sintáctico (AFD). Un autómata finito determinista explícito reconoce la
+   forma de los comandos simples: los estados D0..D5 acumulan prefijos válidos
+   y Dt es la trampa absorbente, de modo que una vez dentro ningún token
+   posterior permite salir.
+3. Sintáctico de jerarquías (AP). Un autómata de pila manual valida la forma
+   ``Raiz(Sub1, Sub2(Sub3))``: empuja ``X`` al encontrar ``(``, la extrae con
+   ``)`` y solo acepta por epsilon desde p5 con la pila en ``['Z0']``.
+
+La semántica (QT2) aplica después los efectos reales. Todos ellos quedan
+confinados en ``entorno_windows/`` y los usuarios se guardan en ``usuarios.json``.
 """
 
 import json
@@ -22,8 +34,14 @@ REGEX_ACCION = r"^(crear|borrar|buscar|inspeccionar|editar)$"
 REGEX_ENTIDAD = r"^(usuario|archivo|carpeta)$"
 REGEX_PARAMETRO = r"^[a-zA-Z0-9_.-]+$"
 
-ALFABETO = set("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_.-(), ")
-CARACTERES_NOMBRE = set("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_.-")
+# Sigma se arma por partes para dejar visible qué caracteres lo componen.
+LETRAS = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ"
+DIGITOS = "0123456789"
+SIGNOS_NOMBRE = "_.-"
+ALFABETO = set(LETRAS + DIGITOS + SIGNOS_NOMBRE + "(), ")
+CARACTERES_NOMBRE = set(LETRAS + DIGITOS + SIGNOS_NOMBRE)
+
+# Palabras que nunca pueden usarse como parámetro: quedarían fuera del AFD.
 RESERVADAS = {"help", "--help", "salir"} | set(ACCIONES) | set(ENTIDADES)
 
 AYUDA = {
@@ -35,8 +53,9 @@ AYUDA = {
     "salir": "salir",
 }
 
-# AFD: un estado por prefijo válido; cualquier transición ausente cae en Dt,
-# que es la trampa absorbente del autómata.
+# AFD: un estado por prefijo válido (D0 inicio, D1 "help", D2 "a",
+# D3 "a --help", D4 "a e", D5 "a e p"). Toda transición ausente cae en Dt, la
+# trampa absorbente del autómata.
 TRANSICIONES = {
     ("D0", "help"): "D1",
     ("D0", "a"): "D2",
@@ -63,7 +82,16 @@ class ErrorSemantico(Exception):
 # Entrada: alfabeto, separación y tokens
 # --------------------------------------------------------------------------
 
-def validar_alfabeto(linea):
+def validar_alfabeto(linea: str) -> None:
+    """Comprueba que la línea pertenezca a Sigma* con un único espacio separador.
+
+    Args:
+        linea: Texto crudo leído de la consola, sin recortar.
+
+    Raises:
+        ErrorLexico: Si la línea está vacía, tiene espacios en los extremos o
+            junto más de un espacio, o contiene un símbolo ajeno a Sigma.
+    """
     if not linea:
         raise ErrorLexico("la línea está vacía")
     if linea != linea.strip():
@@ -75,22 +103,48 @@ def validar_alfabeto(linea):
             raise ErrorLexico(f"el símbolo {caracter!r} no pertenece a Sigma")
 
 
-def dividir(linea):
-    # La forma jerárquica conserva su expresión como un solo campo.
+def dividir_campos(linea: str) -> list[str]:
+    """Parte la línea en tokens respetando la forma jerárquica.
+
+    La expresión ``Raiz(Sub1, Sub2(Sub3))`` contiene espacios internos, así que
+    se conserva completa como tercer campo en lugar de tokenizarla.
+
+    Args:
+        linea: Línea ya validada contra Sigma.
+
+    Returns:
+        Lista de tokens.
+
+    Raises:
+        ErrorSintactico: Si la forma jerárquica no llega a tres campos.
+    """
     if "(" in linea or ")" in linea:
         partes = linea.split(" ", 2)
         if len(partes) != 3:
-            raise ErrorSintactico("la forma jerárquica es: crear carpeta Raiz(Sub1, Sub2(Sub3))")
+            raise ErrorSintactico(
+                "la forma jerárquica es: crear carpeta Raiz(Sub1, Sub2(Sub3))"
+            )
         return partes
     return linea.split(" ")
 
 
-def parametro_valido(campo):
+def parametro_valido(campo: str) -> bool:
+    """Indica si un campo sirve como parámetro: cumple la regex y no es reservado."""
     return bool(re.match(REGEX_PARAMETRO, campo)) and campo not in RESERVADAS
 
 
-def simbolo(posicion, campo, jerarquia):
-    """Traduce cada token al alfabeto abstracto del AFD."""
+def simbolo_afd(posicion: int, campo: str, jerarquia: bool) -> str:
+    """Traduce un token a su símbolo abstracto del AFD según su posición.
+
+    Args:
+        posicion: Índice del token dentro de la línea.
+        campo: Texto del token.
+        jerarquia: True si la línea declara una jerarquía de carpetas.
+
+    Returns:
+        Símbolo del alfabeto abstracto del AFD; ``"INVALIDO"`` si el token no
+        encaja en la posición esperada.
+    """
     if posicion == 0:
         if campo == "help":
             return "help"
@@ -106,7 +160,16 @@ def simbolo(posicion, campo, jerarquia):
     return "INVALIDO"
 
 
-def recorrer_afd(simbolos):
+def recorrer_afd(simbolos: list[str]) -> tuple[str, list[str]]:
+    """Recorre el AFD símbolo a símbolo y devuelve el estado final y la traza.
+
+    Args:
+        simbolos: Símbolos abstractos obtenidos de los tokens.
+
+    Returns:
+        Tupla con el estado alcanzado y la lista de estados visitados, que
+        empieza en D0.
+    """
     estado = "D0"
     recorrido = [estado]
     for simbolo_actual in simbolos:
@@ -119,15 +182,40 @@ def recorrer_afd(simbolos):
 # Autómata de pila para crear carpeta Raiz(Sub1, Sub2(Sub3))
 # --------------------------------------------------------------------------
 
-def cerrar_grupo(pila, padres):
+def cerrar_grupo_ap(pila: list[str], padres: list[list]) -> None:
+    """Aplica la transición de cierre ``)`` del AP.
+
+    Args:
+        pila: Pila del autómata, con ``Z0`` en el fondo y una ``X`` por grupo.
+        padres: Pila auxiliar de listas de hijos donde se acumula el árbol.
+
+    Raises:
+        ErrorSintactico: Si se cierra un grupo que nunca se abrió, es decir, si
+            la pila solo conserva el marcador de fondo.
+    """
     if len(pila) == 1:
         raise ErrorSintactico(f"paréntesis de cierre sin apertura: pila {pila}")
     pila.pop()
     padres.pop()
 
 
-def validar_jerarquia(expresion):
-    """Recorre la expresión con el AP manual y devuelve el árbol de carpetas."""
+def validar_jerarquia_ap(expresion: str) -> dict:
+    """Valida la expresión de carpetas con el AP manual y arma el árbol.
+
+    Estados: p0 nombre de la raíz, p1 primer elemento de un grupo, p2 dentro de
+    un nombre, p3 justo después de una coma, p4 justo después de un cierre y p5
+    expresión completa. La aceptación es por epsilon desde p5 con ``['Z0']``.
+
+    Args:
+        expresion: Texto ``Raiz(Sub1, Sub2(Sub3))`` sin espacios externos.
+
+    Returns:
+        Nodo raíz ``{"nombre": str, "hijos": list}`` con toda la jerarquía.
+
+    Raises:
+        ErrorSintactico: Ante un carácter inesperado, un grupo vacío, una
+            expresión incompleta o paréntesis desbalanceados.
+    """
     print(f"Expresión jerárquica: {expresion}")
     pila = ["Z0"]
     estado = "p0"
@@ -147,13 +235,18 @@ def validar_jerarquia(expresion):
                 pila.append("X")
                 estado = "p1"
             else:
-                raise ErrorSintactico(f"carácter {caracter!r} inesperado en p0: falta el nombre raíz")
+                raise ErrorSintactico(
+                    f"carácter {caracter!r} inesperado en p0: falta el nombre raíz"
+                )
         elif estado == "p1":
+            # Tras '(' se exige al menos un carácter de nombre por grupo.
             if caracter in CARACTERES_NOMBRE:
                 actual = caracter
                 estado = "p2"
             else:
-                raise ErrorSintactico(f"grupo vacío: se esperaba un elemento tras '(' y llegó {caracter!r}")
+                raise ErrorSintactico(
+                    f"grupo vacío: se esperaba un elemento tras '(' y llegó {caracter!r}"
+                )
         elif estado == "p2":
             if caracter in CARACTERES_NOMBRE:
                 actual += caracter
@@ -171,11 +264,13 @@ def validar_jerarquia(expresion):
             elif caracter == ")":
                 padres[-1].append({"nombre": actual, "hijos": []})
                 actual = ""
-                cerrar_grupo(pila, padres)
+                cerrar_grupo_ap(pila, padres)
                 estado = "p4"
             else:
                 raise ErrorSintactico(f"carácter {caracter!r} inesperado dentro de un nombre")
         elif estado == "p3":
+            # Tras la coma se admite el espacio de formato y luego un nombre;
+            # un cierre inmediato equivale a un elemento vacío.
             if caracter == " " and expresion[posicion - 1] == ",":
                 pass
             elif caracter in CARACTERES_NOMBRE:
@@ -185,13 +280,15 @@ def validar_jerarquia(expresion):
                 raise ErrorSintactico(f"elemento vacío tras la coma y llegó {caracter!r}")
         else:  # p4: se acaba de cerrar un grupo
             if caracter == ")":
-                cerrar_grupo(pila, padres)
+                cerrar_grupo_ap(pila, padres)
             elif caracter == ",":
                 estado = "p3"
             else:
                 raise ErrorSintactico(f"carácter {caracter!r} inesperado tras ')'")
         print(f"  {anterior} --{caracter!r}--> {estado} | pila {pila}")
 
+    # Al agotar la entrada, p2 cierra el último nombre del grupo abierto y p4 ya
+    # venía de un cierre; cualquier otro estado deja la expresión incompleta.
     if estado == "p2":
         padres[-1].append({"nombre": actual, "hijos": []})
         estado = "p5"
@@ -208,26 +305,56 @@ def validar_jerarquia(expresion):
     return raiz
 
 
-def comprobar_arbol(nodo, padre):
+def comprobar_arbol_disponible(nodo: dict, padre: str) -> None:
+    """Verifica que ninguna carpeta del árbol exista ya en disco.
+
+    Se recorre el árbol completo antes de crear nada, de modo que un choque a
+    mitad de la jerarquía no deje carpetas a medias.
+
+    Args:
+        nodo: Nodo actual del árbol.
+        padre: Ruta de la carpeta que lo contendrá.
+
+    Raises:
+        ErrorSemantico: Si la carpeta del nodo ya existe.
+    """
     ruta = os.path.join(padre, nodo["nombre"])
     if os.path.exists(ruta):
         raise ErrorSemantico(f"ya existe la carpeta {nodo['nombre']}")
     for hijo in nodo["hijos"]:
-        comprobar_arbol(hijo, ruta)
+        comprobar_arbol_disponible(hijo, ruta)
 
 
-def crear_arbol(nodo, padre):
+def crear_arbol_en_disco(nodo: dict, padre: str) -> None:
+    """Crea en disco el nodo y, recursivamente, toda su descendencia.
+
+    Args:
+        nodo: Nodo actual del árbol ya validado.
+        padre: Ruta de la carpeta que lo contendrá.
+    """
     ruta = os.path.join(padre, nodo["nombre"])
     os.mkdir(ruta)
     for hijo in nodo["hijos"]:
-        crear_arbol(hijo, ruta)
+        crear_arbol_en_disco(hijo, ruta)
 
 
 # --------------------------------------------------------------------------
 # Sandbox y datos
 # --------------------------------------------------------------------------
 
-def ruta_sandbox(nombre):
+def ruta_sandbox(nombre: str) -> str:
+    """Resuelve un nombre dentro del sandbox y bloquea escapes y datos internos.
+
+    Args:
+        nombre: Parámetro del comando, ya validado por el AFD.
+
+    Returns:
+        Ruta normalizada dentro de ``entorno_windows/``.
+
+    Raises:
+        ErrorSemantico: Si el nombre es ``.`` o ``..``, o si la ruta resuelta
+            termina fuera del sandbox.
+    """
     if nombre in (".", ".."):
         raise ErrorSemantico(f"componente de ruta no permitido: {nombre!r}")
     ruta = os.path.normpath(os.path.join(SANDBOX, nombre))
@@ -236,7 +363,15 @@ def ruta_sandbox(nombre):
     return ruta
 
 
-def cargar_usuarios():
+def cargar_usuarios() -> list[str]:
+    """Lee la lista de usuarios registrados.
+
+    Returns:
+        Lista de nombres; vacía si el archivo aún no existe.
+
+    Raises:
+        ValueError: Si el archivo no contiene una lista de cadenas.
+    """
     if not os.path.exists(USUARIOS):
         return []
     with open(USUARIOS, encoding="utf-8") as archivo:
@@ -246,7 +381,15 @@ def cargar_usuarios():
     return usuarios
 
 
-def guardar_usuarios(usuarios):
+def guardar_usuarios(usuarios: list[str]) -> None:
+    """Persiste la lista de usuarios mediante escritura atómica.
+
+    Se escribe un archivo temporal y se reemplaza al final para que una
+    interrupción no deje el store truncado.
+
+    Args:
+        usuarios: Lista completa de nombres a guardar.
+    """
     os.makedirs(SANDBOX, exist_ok=True)
     temporal = USUARIOS + ".tmp"
     with open(temporal, "w", encoding="utf-8") as archivo:
@@ -254,7 +397,15 @@ def guardar_usuarios(usuarios):
     os.replace(temporal, USUARIOS)
 
 
-def confirmar(pregunta):
+def confirmar_accion(pregunta: str) -> bool:
+    """Pide confirmación en consola antes de una operación destructiva.
+
+    Args:
+        pregunta: Texto que se muestra al usuario.
+
+    Returns:
+        True si la operación debe continuar; False si se canceló.
+    """
     # En una tubería no hay usuario interactivo: la orden ya es explícita.
     if not os.isatty(0):
         return True
@@ -268,7 +419,17 @@ def confirmar(pregunta):
 # Semántica de las cinco acciones sobre las tres entidades
 # --------------------------------------------------------------------------
 
-def operar_usuario(accion, nombre):
+def operar_usuario(accion: str, nombre: str) -> None:
+    """Aplica una de las cinco acciones sobre el registro de usuarios.
+
+    Args:
+        accion: Acción semántica ya validada.
+        nombre: Nombre del usuario destino.
+
+    Raises:
+        ErrorSemantico: Si el usuario ya existe y se intenta crear, si no
+            existe en cualquier otra acción, o si el renombrado choca con otro.
+    """
     usuarios = cargar_usuarios()
     existe = nombre in usuarios
     if accion == "crear":
@@ -278,7 +439,7 @@ def operar_usuario(accion, nombre):
     elif accion == "borrar":
         if not existe:
             raise ErrorSemantico(f"el usuario {nombre} no existe")
-        if not confirmar(f"¿Borrar el usuario {nombre}?"):
+        if not confirmar_accion(f"¿Borrar el usuario {nombre}?"):
             return
         usuarios.remove(nombre)
     elif accion == "buscar":
@@ -293,7 +454,7 @@ def operar_usuario(accion, nombre):
         print(f"Total de usuarios registrados: {len(usuarios)}")
         print(f"Archivo: {USUARIOS}")
         return
-    else:  # editar
+    else:  # editar: renombra con el sufijo _editado
         if not existe:
             raise ErrorSemantico(f"el usuario {nombre} no existe")
         nuevo = nombre + "_editado"
@@ -305,7 +466,17 @@ def operar_usuario(accion, nombre):
     print("Operación completada.")
 
 
-def operar_archivo(accion, nombre, ruta):
+def operar_archivo(accion: str, nombre: str, ruta: str) -> None:
+    """Aplica una de las cinco acciones sobre un archivo del sandbox.
+
+    Args:
+        accion: Acción semántica ya validada.
+        nombre: Nombre con el que se reporta al usuario.
+        ruta: Ruta resuelta y confinada al sandbox.
+
+    Raises:
+        ErrorSemantico: Si el archivo ya existe al crear o falta en el resto.
+    """
     existe = os.path.isfile(ruta)
     if accion == "crear":
         if os.path.exists(ruta):
@@ -315,7 +486,7 @@ def operar_archivo(accion, nombre, ruta):
     elif accion == "borrar":
         if not existe:
             raise ErrorSemantico(f"no existe el archivo {nombre}")
-        if not confirmar(f"¿Borrar el archivo {nombre}?"):
+        if not confirmar_accion(f"¿Borrar el archivo {nombre}?"):
             return
         os.remove(ruta)
     elif accion == "buscar":
@@ -330,6 +501,7 @@ def operar_archivo(accion, nombre, ruta):
         print(f"Ruta: {ruta}")
         print(f"Tamaño: {os.path.getsize(ruta)} bytes")
         print(f"Modificado: {datetime.fromtimestamp(os.path.getmtime(ruta)):%Y-%m-%d %H:%M:%S}")
+        # Se muestran solo los primeros 200 caracteres del contenido.
         with open(ruta, encoding="utf-8", errors="replace") as archivo:
             contenido = archivo.read(200)
         print(f"Contenido: {contenido!r}" if contenido else "Contenido: (vacío)")
@@ -343,7 +515,18 @@ def operar_archivo(accion, nombre, ruta):
     print("Operación completada.")
 
 
-def operar_carpeta(accion, nombre, ruta):
+def operar_carpeta(accion: str, nombre: str, ruta: str) -> None:
+    """Aplica una de las cinco acciones sobre una carpeta del sandbox.
+
+    Args:
+        accion: Acción semántica ya validada.
+        nombre: Nombre con el que se reporta al usuario.
+        ruta: Ruta resuelta y confinada al sandbox.
+
+    Raises:
+        ErrorSemantico: Si la carpeta ya existe al crear, falta en el resto o
+            el nombre renombrado ya está ocupado.
+    """
     existe = os.path.isdir(ruta)
     if accion == "crear":
         if os.path.exists(ruta):
@@ -353,7 +536,7 @@ def operar_carpeta(accion, nombre, ruta):
     elif accion == "borrar":
         if not existe:
             raise ErrorSemantico(f"no existe la carpeta {nombre}")
-        if not confirmar(f"¿Borrar la carpeta {nombre}?"):
+        if not confirmar_accion(f"¿Borrar la carpeta {nombre}?"):
             return
         shutil.rmtree(ruta)
     elif accion == "buscar":
@@ -382,19 +565,33 @@ def operar_carpeta(accion, nombre, ruta):
     print("Operación completada.")
 
 
-def ejecutar(accion, entidad, parametro, arbol=None):
+def aplicar_accion(accion: str, entidad: str, parametro: str, arbol: dict | None = None) -> None:
+    """Despacha la acción ya validada hacia los efectos concretos.
+
+    Args:
+        accion: Acción semántica.
+        entidad: Entidad destino.
+        parametro: Nombre o expresión jerárquica.
+        arbol: Árbol de carpetas del AP cuando la línea lo declaró.
+
+    Raises:
+        ErrorSemantico: Si la ruta escapa del sandbox, si toca datos internos o
+            si el estado del sandbox no admite la operación.
+    """
     if entidad == "usuario":
         return operar_usuario(accion, parametro)
     if arbol is not None:
         os.makedirs(SANDBOX, exist_ok=True)
-        comprobar_arbol(arbol, SANDBOX)
-        crear_arbol(arbol, SANDBOX)
+        comprobar_arbol_disponible(arbol, SANDBOX)
+        crear_arbol_en_disco(arbol, SANDBOX)
         print(f"Jerarquía creada dentro de {SANDBOX}/: {parametro}")
         print("Operación completada.")
         return
     ruta = ruta_sandbox(parametro)
-    # usuarios.json es dato interno: solo lectura; cualquier acción que escriba falla cerrado
-    if os.path.normpath(ruta) == os.path.normpath(USUARIOS) and accion not in ("buscar", "inspeccionar"):
+    # usuarios.json es dato interno: solo lectura. Cualquier acción que escriba
+    # falla cerrado y el store queda intacto.
+    es_dato_interno = os.path.normpath(ruta) == os.path.normpath(USUARIOS)
+    if es_dato_interno and accion not in ("buscar", "inspeccionar"):
         raise ErrorSemantico(f"{parametro} es un dato interno protegido")
     if entidad == "archivo":
         return operar_archivo(accion, parametro, ruta)
@@ -405,12 +602,22 @@ def ejecutar(accion, entidad, parametro, arbol=None):
 # Flujo de una línea: léxico -> AFD -> AP -> semántica -> ejecución
 # --------------------------------------------------------------------------
 
-def ejecutar_linea(linea):
-    """Procesa una línea. Devuelve False cuando hay que cerrar la sesión."""
+def procesar_linea(linea: str) -> bool:
+    """Procesa una línea completa y reporta su ruta por el grafo de estados.
+
+    Las excepciones no se propagan: cada familia de error se traduce a la ruta
+    QT1 (léxico/sintáctico) o QT2 (semántica/datos).
+
+    Args:
+        linea: Línea leída de la consola.
+
+    Returns:
+        False cuando la línea pide cerrar la sesión; True en cualquier otro caso.
+    """
     ruta_grafo = ["Q0"]
     try:
         validar_alfabeto(linea)
-        tokens = dividir(linea)
+        tokens = dividir_campos(linea)
         print(f"Tokens: {tokens}")
         if tokens == ["salir"]:
             print("Ruta: Q0 -> Q7")
@@ -418,7 +625,7 @@ def ejecutar_linea(linea):
             return False
 
         jerarquia = "(" in linea or ")" in linea
-        simbolos = [simbolo(i, campo, jerarquia) for i, campo in enumerate(tokens)]
+        simbolos = [simbolo_afd(i, campo, jerarquia) for i, campo in enumerate(tokens)]
         estado, recorrido = recorrer_afd(simbolos)
         print(f"Recorrido AFD: {' -> '.join(recorrido)}")
         if estado not in FINALES:
@@ -444,11 +651,11 @@ def ejecutar_linea(linea):
         if jerarquia:
             if accion != "crear" or entidad != "carpeta":
                 raise ErrorSintactico("la forma jerárquica solo aplica a crear carpeta")
-            arbol = validar_jerarquia(parametro)
+            arbol = validar_jerarquia_ap(parametro)
         else:
             arbol = None
         ruta_grafo += ["Q5", "Q6"]
-        ejecutar(accion, entidad, parametro, arbol)
+        aplicar_accion(accion, entidad, parametro, arbol)
         ruta_grafo.append("Q7")
         print(f"Ruta: {' -> '.join(ruta_grafo)}")
     except (ErrorLexico, ErrorSintactico) as error:
@@ -466,11 +673,12 @@ def ejecutar_linea(linea):
     return True
 
 
-def main():
+def main() -> None:
+    """Bucle de lectura y evaluación hasta ``salir``, EOF o interrupción."""
     print("Mini terminal teórica. Escribe help para ver los comandos.")
     while True:
         try:
-            if not ejecutar_linea(input("> ")):
+            if not procesar_linea(input("> ")):
                 break
         except (EOFError, KeyboardInterrupt):
             print("\nHasta luego.")
