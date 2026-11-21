@@ -6,7 +6,7 @@ El programa recorre tres capas de la teoría de lenguajes formales:
    palabra pertenece a cada categoría, y el alfabeto Sigma se valida carácter a
    carácter junto con la separación por un único espacio.
 2. Sintáctico (AFD). Un autómata finito determinista explícito reconoce la
-   forma de los comandos simples: los estados D0..D5 acumulan prefijos válidos
+   forma de los comandos simples: los estados D0..D7 acumulan prefijos válidos
    y Dt es la trampa absorbente, de modo que una vez dentro ningún token
    posterior permite salir.
 3. Sintáctico de jerarquías (AP). Un autómata de pila manual valida la forma
@@ -48,22 +48,28 @@ AYUDA = {
     "crear": "crear usuario|archivo|carpeta NOMBRE  (carpeta admite Raiz(Sub1, Sub2(Sub3)))",
     "borrar": "borrar usuario|archivo|carpeta NOMBRE",
     "buscar": "buscar usuario|archivo|carpeta NOMBRE",
-    "inspeccionar": "inspeccionar usuario|archivo|carpeta NOMBRE",
+    "inspeccionar": "inspeccionar usuario  |  inspeccionar usuario|archivo|carpeta NOMBRE",
     "editar": "editar usuario|archivo|carpeta NOMBRE",
     "salir": "salir",
 }
 
 # AFD: un estado por prefijo válido (D0 inicio, D1 "help", D2 "a",
-# D3 "a --help", D4 "a e", D5 "a e p"). Toda transición ausente cae en Dt, la
-# trampa absorbente del autómata.
+# D3 "a --help", D4 "a e", D5 "a e p", D6 "inspeccionar", D7 "inspeccionar
+# usuario"). Toda transición ausente cae en Dt, la trampa absorbente.
 TRANSICIONES = {
     ("D0", "help"): "D1",
     ("D0", "a"): "D2",
+    ("D0", "i"): "D6",
     ("D2", "--help"): "D3",
     ("D2", "e"): "D4",
+    ("D2", "eu"): "D4",
     ("D4", "p"): "D5",
+    ("D6", "--help"): "D3",
+    ("D6", "e"): "D4",
+    ("D6", "eu"): "D7",
+    ("D7", "p"): "D5",
 }
-FINALES = ("D1", "D3", "D5")
+FINALES = ("D1", "D3", "D5", "D7")
 
 
 class ErrorLexico(Exception):
@@ -148,10 +154,14 @@ def simbolo_afd(posicion: int, campo: str, jerarquia: bool) -> str:
     if posicion == 0:
         if campo == "help":
             return "help"
+        if campo == "inspeccionar":
+            return "i"
         return "a" if re.match(REGEX_ACCION, campo) else "INVALIDO"
     if posicion == 1:
         if campo == "--help":
             return "--help"
+        if campo == "usuario":
+            return "eu"
         return "e" if re.match(REGEX_ENTIDAD, campo) else "INVALIDO"
     if posicion == 2:
         if jerarquia:
@@ -466,6 +476,21 @@ def operar_usuario(accion: str, nombre: str) -> None:
     print("Operación completada.")
 
 
+def listar_usuarios() -> None:
+    """Muestra los usuarios registrados sin pedir nombre (forma corta).
+
+    Raises:
+        ValueError: Si el store no contiene una lista de nombres.
+        OSError: Si el store no se puede leer.
+    """
+    usuarios = cargar_usuarios()
+    print(f"Usuarios registrados: {len(usuarios)}")
+    for usuario in usuarios:
+        print(f"  - {usuario}")
+    if not usuarios:
+        print("  (no hay usuarios registrados)")
+
+
 def operar_archivo(accion: str, nombre: str, ruta: str) -> None:
     """Aplica una de las cinco acciones sobre un archivo del sandbox.
 
@@ -501,9 +526,11 @@ def operar_archivo(accion: str, nombre: str, ruta: str) -> None:
         print(f"Ruta: {ruta}")
         print(f"Tamaño: {os.path.getsize(ruta)} bytes")
         print(f"Modificado: {datetime.fromtimestamp(os.path.getmtime(ruta)):%Y-%m-%d %H:%M:%S}")
-        # Se muestran solo los primeros 200 caracteres del contenido.
-        with open(ruta, encoding="utf-8", errors="replace") as archivo:
-            contenido = archivo.read(200)
+        try:
+            with open(ruta, encoding="utf-8", errors="replace") as archivo:
+                contenido = archivo.read()
+        except OSError as error:
+            raise ErrorSemantico(f"no se pudo leer {nombre}: {error}") from error
         print(f"Contenido: {contenido!r}" if contenido else "Contenido: (vacío)")
         return
     else:  # editar: agrega una línea con la marca de tiempo del cambio
@@ -546,6 +573,8 @@ def operar_carpeta(accion: str, nombre: str, ruta: str) -> None:
         return
     elif accion == "inspeccionar":
         if not existe:
+            if os.path.exists(ruta):
+                raise ErrorSemantico(f"{nombre} existe pero no es una carpeta")
             raise ErrorSemantico(f"no existe la carpeta {nombre}")
         hijos = sorted(os.listdir(ruta))
         print(f"Carpeta: {nombre}")
@@ -553,6 +582,8 @@ def operar_carpeta(accion: str, nombre: str, ruta: str) -> None:
         print(f"Elementos: {len(hijos)}")
         for hijo in hijos:
             print(f"  - {hijo}")
+        if not hijos:
+            print("  (carpeta vacía)")
         return
     else:  # editar: renombra con el sufijo _editada para no sobrescribir nada
         if not existe:
@@ -643,6 +674,13 @@ def procesar_linea(linea: str) -> bool:
         if estado == "D3":
             ruta_grafo += ["Q2", "Q3", "Q7"]
             print(f"Uso: {AYUDA[tokens[0]]}")
+            print(f"Ruta: {' -> '.join(ruta_grafo)}")
+            return True
+
+        if estado == "D7":
+            ruta_grafo += ["Q2", "Q3", "Q4", "Q5", "Q6"]
+            listar_usuarios()
+            ruta_grafo.append("Q7")
             print(f"Ruta: {' -> '.join(ruta_grafo)}")
             return True
 
