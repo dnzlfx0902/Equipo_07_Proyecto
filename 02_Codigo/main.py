@@ -35,9 +35,7 @@ ENTIDADES = ("usuario", "archivo", "carpeta")
 REGEX_ACCION = r"^(crear|borrar|buscar|inspeccionar|editar)$"
 REGEX_ENTIDAD = r"^(usuario|archivo|carpeta)$"
 REGEX_PARAMETRO = r"^[a-zA-Z0-9_.-]+$"
-# R4 del Doc: validación cruzada del sub-lenguaje simple. No cubre la forma
-# jerárquica ni la forma corta ``inspeccionar usuario`` (hueco H8 de la matriz),
-# así que se usa para contrastar AFD <-> regex, no para validar la entrada.
+# R4: validación cruzada del sub-lenguaje simple, no de la entrada.
 REGEX_COMANDO_COMPLETO = (
     r"^(help|salir|(crear|borrar|buscar|inspeccionar|editar) "
     r"(--help|(usuario|archivo|carpeta) [a-zA-Z0-9_.-]+))$"
@@ -62,10 +60,7 @@ AYUDA = {
     "salir": "salir",
 }
 
-# AFD: un estado por prefijo válido (D0 inicio, D1 "help", D2 "a",
-# D3 "a --help", D4 "a e", D5 "a e p", D6 "inspeccionar", D7 "inspeccionar
-# usuario", D8 "salir"). Toda transición ausente cae en Dt, la trampa
-# absorbente.
+# AFD: un estado por prefijo válido; toda transición ausente cae en Dt, la trampa.
 TRANSICIONES = {
     ("D0", "help"): "D1",
     ("D0", "a"): "D2",
@@ -82,12 +77,7 @@ TRANSICIONES = {
 }
 FINALES = ("D1", "D3", "D5", "D7", "D8")
 
-# AFN del lenguaje ampliado. Desde q0 la acción ``a`` y el verbo ``i`` abren dos
-# ramas simultáneas (ayuda y ejecución), así que δ(q0, a) y δ(q0, i) tienen dos
-# destinos: ese no determinismo real es lo que justifica el AFN. El AFD de
-# arriba es su construcción por subconjuntos, estado por subconjunto:
-# D0={q0}, D1={q1}, D2={q2,q3}, D3={q4}, D4={q5}, D5={q6}, D6={q7,q8},
-# D7={q9}, D8={q10}, Dt={}.
+# AFN: δ(q0, a) y δ(q0, i) abren dos ramas; el AFD de arriba sale por subconjuntos.
 AFN_INICIAL = "q0"
 AFN_FINALES = frozenset({"q1", "q4", "q6", "q9", "q10"})
 AFN = {
