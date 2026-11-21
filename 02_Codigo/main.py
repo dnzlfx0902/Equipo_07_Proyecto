@@ -1,24 +1,3 @@
-"""Mini terminal de teoría computacional.
-
-El programa recorre tres capas de la teoría de lenguajes formales:
-
-1. Léxico (expresiones regulares). Las tres regex de ``REGEX_*`` deciden si una
-   palabra pertenece a cada categoría, y el alfabeto Sigma se valida carácter a
-   carácter junto con la separación por un único espacio.
-2. Sintáctico (AFD). Un autómata finito determinista explícito reconoce la
-   forma de los comandos simples: los estados D0..D7 acumulan prefijos válidos
-   y Dt es la trampa absorbente, de modo que una vez dentro ningún token
-   posterior permite salir. Ese AFD se deriva del AFN declarado en ``AFN`` con
-   la construcción por subconjuntos (``construir_afd``), y al arrancar se
-   contrasta que ambos aceptan el mismo lenguaje (``verificar_automatas``).
-3. Sintáctico de jerarquías (AP). Un autómata de pila manual valida la forma
-   ``Raiz(Sub1, Sub2(Sub3))``: empuja ``X`` al encontrar ``(``, la extrae con
-   ``)`` y solo acepta por epsilon desde p5 con la pila en ``['Z0']``.
-
-La semántica (QT2) aplica después los efectos reales. Todos ellos quedan
-confinados en ``entorno_windows/`` y los usuarios se guardan en ``usuarios.json``.
-"""
-
 import itertools
 import json
 import os
@@ -26,11 +5,13 @@ import re
 import shutil
 from datetime import datetime
 
-SANDBOX = "entorno_windows"
+SANDBOX = "entorno"
 USUARIOS = os.path.join(SANDBOX, "usuarios.json")
 
 ACCIONES = ("crear", "borrar", "buscar", "inspeccionar", "editar")
 ENTIDADES = ("usuario", "archivo", "carpeta")
+# Un rechazo léxico/sintáctico no expone estados ni tokens: una sola salida.
+RECHAZO = "Comando no encontrado, usa help para ver la lista de comandos"
 
 REGEX_ACCION = r"^(crear|borrar|buscar|inspeccionar|editar)$"
 REGEX_ENTIDAD = r"^(usuario|archivo|carpeta)$"
@@ -444,7 +425,7 @@ def ruta_sandbox(nombre: str) -> str:
         nombre: Parámetro del comando, ya validado por el AFD.
 
     Returns:
-        Ruta normalizada dentro de ``entorno_windows/``.
+        Ruta normalizada dentro de ``entorno/``.
 
     Raises:
         ErrorSemantico: Si el nombre es ``.`` o ``..``, o si la ruta resuelta
@@ -710,10 +691,10 @@ def aplicar_accion(accion: str, entidad: str, parametro: str, arbol: dict | None
 
 
 def procesar_linea(linea: str) -> None:
-    """Procesa una línea completa y reporta su ruta por el grafo de estados.
+    """Procesa una línea completa y aplica el efecto si es válida.
 
-    Las excepciones no se propagan: cada familia de error se traduce a la ruta
-    QT1 (léxico/sintáctico) o QT2 (semántica/datos).
+    Las excepciones no se propagan: un rechazo léxico/sintáctico usa el mensaje
+    único de comando no encontrado; la semántica y los datos conservan su causa.
 
     Args:
         linea: Línea leída de la consola.
@@ -721,14 +702,11 @@ def procesar_linea(linea: str) -> None:
     try:
         validar_alfabeto(linea)
         tokens = dividir_campos(linea)
-        print(f"Tokens: {tokens}")
 
         jerarquia = "(" in linea or ")" in linea
         simbolos = [simbolo_afd(i, campo, jerarquia) for i, campo in enumerate(tokens)]
         estado, _ = recorrer_afd(simbolos)
         if estado not in FINALES:
-            if estado == "Dt":
-                print("Dt es la trampa absorbente: los tokens restantes se consumen sin salir de ella.")
             raise ErrorSintactico(f"la entrada queda en {estado}, que no es estado final")
 
         if estado == "D1":
@@ -752,8 +730,8 @@ def procesar_linea(linea: str) -> None:
         else:
             arbol = None
         aplicar_accion(accion, entidad, parametro, arbol)
-    except (ErrorLexico, ErrorSintactico) as error:
-        print(f"Error léxico/sintáctico (QT1): {error}")
+    except (ErrorLexico, ErrorSintactico):
+        print(RECHAZO)
     except ErrorSemantico as error:
         print(f"Error semántico (QT2): {error}")
     except (OSError, ValueError) as error:
