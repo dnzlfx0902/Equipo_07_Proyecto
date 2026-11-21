@@ -274,8 +274,7 @@ def verificar_automatas() -> None:
             for simbolo in simbolos:
                 subconjunto = construidas.get((subconjunto, simbolo), frozenset())
             assert (subconjunto in finales_construidos) == (estado in FINALES), combinacion
-    # R4 solo se define sobre el sub-lenguaje simple: sin paréntesis y sin la
-    # forma corta ``inspeccionar usuario`` (huecos H7/H8 de la matriz).
+    # R4 se contrasta con el AFD solo en el sub-lenguaje simple, sin paréntesis.
     for linea in (
         "help", "salir", "crear --help", "inspeccionar --help",
         "crear usuario juan_perez", "buscar archivo reporte-2026.pdf",
@@ -286,8 +285,6 @@ def verificar_automatas() -> None:
         simbolos = [simbolo_afd(i, campo, False) for i, campo in enumerate(linea.split(" "))]
         estado, _ = recorrer_afd(simbolos)
         assert bool(re.match(REGEX_COMANDO_COMPLETO, linea)) == (estado in FINALES), linea
-    # AN1: los vértices son las transiciones reales del AFD; ningún estado
-    # declarado puede quedar inalcanzable desde D0.
     alcanzables, pendientes = {"D0"}, ["D0"]
     while pendientes:
         actual = pendientes.pop()
@@ -297,7 +294,6 @@ def verificar_automatas() -> None:
                 pendientes.append(destino)
     declarados = {"Dt"} | set(FINALES) | set(TRANSICIONES.values())
     declarados |= {origen for origen, _simbolo in TRANSICIONES}
-    # Dt es alcanzable si algún estado vivo deja sin transición algún símbolo.
     if any((estado, simbolo) not in TRANSICIONES
            for estado in alcanzables for simbolo in SIMBOLOS_AFD):
         alcanzables.add("Dt")
@@ -406,8 +402,7 @@ def validar_jerarquia_ap(expresion: str) -> dict:
                 raise ErrorSintactico(f"carácter {caracter!r} inesperado tras ')'")
         print(f"  {anterior} --{caracter!r}--> {estado} | pila {pila}")
 
-    # Al agotar la entrada, p2 cierra el último nombre del grupo abierto y p4 ya
-    # venía de un cierre; cualquier otro estado deja la expresión incompleta.
+    # p2 cierra el último nombre y p4 ya venía de un cierre; el resto queda incompleto.
     if estado == "p2":
         padres[-1].append({"nombre": actual, "hijos": []})
         estado = "p5"
@@ -720,8 +715,7 @@ def aplicar_accion(accion: str, entidad: str, parametro: str, arbol: dict | None
         print("Operación completada.")
         return
     ruta = ruta_sandbox(parametro)
-    # usuarios.json es dato interno: solo lectura. Cualquier acción que escriba
-    # falla cerrado y el store queda intacto.
+    # usuarios.json es dato interno: solo lectura, escribir falla cerrado.
     es_dato_interno = os.path.normpath(ruta) == os.path.normpath(USUARIOS)
     if es_dato_interno and accion not in ("buscar", "inspeccionar"):
         raise ErrorSemantico(f"{parametro} es un dato interno protegido")
