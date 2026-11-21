@@ -32,13 +32,10 @@ USUARIOS = os.path.join(SANDBOX, "usuarios.json")
 ACCIONES = ("crear", "borrar", "buscar", "inspeccionar", "editar")
 ENTIDADES = ("usuario", "archivo", "carpeta")
 
-# Las tres expresiones regulares del analizador léxico.
 REGEX_ACCION = r"^(crear|borrar|buscar|inspeccionar|editar)$"
 REGEX_ENTIDAD = r"^(usuario|archivo|carpeta)$"
 REGEX_PARAMETRO = r"^[a-zA-Z0-9_.-]+$"
-# R4 del Doc: validación cruzada del sub-lenguaje simple. No cubre la forma
-# jerárquica ni la forma corta ``inspeccionar usuario`` (hueco H8 de la matriz),
-# así que se usa para contrastar AFD <-> regex, no para validar la entrada.
+# R4: validación cruzada del sub-lenguaje simple, no de la entrada.
 REGEX_COMANDO_COMPLETO = (
     r"^(help|salir|(crear|borrar|buscar|inspeccionar|editar) "
     r"(--help|(usuario|archivo|carpeta) [a-zA-Z0-9_.-]+))$"
@@ -63,10 +60,7 @@ AYUDA = {
     "salir": "salir",
 }
 
-# AFD: un estado por prefijo válido (D0 inicio, D1 "help", D2 "a",
-# D3 "a --help", D4 "a e", D5 "a e p", D6 "inspeccionar", D7 "inspeccionar
-# usuario", D8 "salir"). Toda transición ausente cae en Dt, la trampa
-# absorbente.
+# AFD: un estado por prefijo válido; toda transición ausente cae en Dt, la trampa.
 TRANSICIONES = {
     ("D0", "help"): "D1",
     ("D0", "a"): "D2",
@@ -83,12 +77,7 @@ TRANSICIONES = {
 }
 FINALES = ("D1", "D3", "D5", "D7", "D8")
 
-# AFN del lenguaje ampliado. Desde q0 la acción ``a`` y el verbo ``i`` abren dos
-# ramas simultáneas (ayuda y ejecución), así que δ(q0, a) y δ(q0, i) tienen dos
-# destinos: ese no determinismo real es lo que justifica el AFN. El AFD de
-# arriba es su construcción por subconjuntos, estado por subconjunto:
-# D0={q0}, D1={q1}, D2={q2,q3}, D3={q4}, D4={q5}, D5={q6}, D6={q7,q8},
-# D7={q9}, D8={q10}, Dt={}.
+# AFN: δ(q0, a) y δ(q0, i) abren dos ramas; el AFD de arriba sale por subconjuntos.
 AFN_INICIAL = "q0"
 AFN_FINALES = frozenset({"q1", "q4", "q6", "q9", "q10"})
 AFN = {
@@ -119,10 +108,6 @@ class ErrorSintactico(Exception):
 class ErrorSemantico(Exception):
     """El comando es válido, pero el estado del sandbox no lo permite."""
 
-
-# --------------------------------------------------------------------------
-# Entrada: alfabeto, separación y tokens
-# --------------------------------------------------------------------------
 
 def validar_alfabeto(linea: str) -> None:
     """Comprueba que la línea pertenezca a Sigma* con un único espacio separador.
@@ -279,8 +264,7 @@ def verificar_automatas() -> None:
             for simbolo in simbolos:
                 subconjunto = construidas.get((subconjunto, simbolo), frozenset())
             assert (subconjunto in finales_construidos) == (estado in FINALES), combinacion
-    # R4 solo se define sobre el sub-lenguaje simple: sin paréntesis y sin la
-    # forma corta ``inspeccionar usuario`` (huecos H7/H8 de la matriz).
+    # R4 se contrasta con el AFD solo en el sub-lenguaje simple, sin paréntesis.
     for linea in (
         "help", "salir", "crear --help", "inspeccionar --help",
         "crear usuario juan_perez", "buscar archivo reporte-2026.pdf",
@@ -291,8 +275,6 @@ def verificar_automatas() -> None:
         simbolos = [simbolo_afd(i, campo, False) for i, campo in enumerate(linea.split(" "))]
         estado, _ = recorrer_afd(simbolos)
         assert bool(re.match(REGEX_COMANDO_COMPLETO, linea)) == (estado in FINALES), linea
-    # AN1: los vértices son las transiciones reales del AFD; ningún estado
-    # declarado puede quedar inalcanzable desde D0.
     alcanzables, pendientes = {"D0"}, ["D0"]
     while pendientes:
         actual = pendientes.pop()
@@ -302,16 +284,11 @@ def verificar_automatas() -> None:
                 pendientes.append(destino)
     declarados = {"Dt"} | set(FINALES) | set(TRANSICIONES.values())
     declarados |= {origen for origen, _simbolo in TRANSICIONES}
-    # Dt es alcanzable si algún estado vivo deja sin transición algún símbolo.
     if any((estado, simbolo) not in TRANSICIONES
            for estado in alcanzables for simbolo in SIMBOLOS_AFD):
         alcanzables.add("Dt")
     assert alcanzables == declarados, declarados - alcanzables
 
-
-# --------------------------------------------------------------------------
-# Autómata de pila para crear carpeta Raiz(Sub1, Sub2(Sub3))
-# --------------------------------------------------------------------------
 
 def cerrar_grupo_ap(pila: list[str], padres: list[list]) -> None:
     """Aplica la transición de cierre ``)`` del AP.
@@ -370,7 +347,6 @@ def validar_jerarquia_ap(expresion: str) -> dict:
                     f"carácter {caracter!r} inesperado en p0: falta el nombre raíz"
                 )
         elif estado == "p1":
-            # Tras '(' se exige al menos un carácter de nombre por grupo.
             if caracter in CARACTERES_NOMBRE:
                 actual = caracter
                 estado = "p2"
@@ -400,8 +376,6 @@ def validar_jerarquia_ap(expresion: str) -> dict:
             else:
                 raise ErrorSintactico(f"carácter {caracter!r} inesperado dentro de un nombre")
         elif estado == "p3":
-            # Tras la coma se admite el espacio de formato y luego un nombre;
-            # un cierre inmediato equivale a un elemento vacío.
             if caracter == " " and expresion[posicion - 1] == ",":
                 pass
             elif caracter in CARACTERES_NOMBRE:
@@ -409,7 +383,7 @@ def validar_jerarquia_ap(expresion: str) -> dict:
                 estado = "p2"
             else:
                 raise ErrorSintactico(f"elemento vacío tras la coma y llegó {caracter!r}")
-        else:  # p4: se acaba de cerrar un grupo
+        else:
             if caracter == ")":
                 cerrar_grupo_ap(pila, padres)
             elif caracter == ",":
@@ -418,8 +392,7 @@ def validar_jerarquia_ap(expresion: str) -> dict:
                 raise ErrorSintactico(f"carácter {caracter!r} inesperado tras ')'")
         print(f"  {anterior} --{caracter!r}--> {estado} | pila {pila}")
 
-    # Al agotar la entrada, p2 cierra el último nombre del grupo abierto y p4 ya
-    # venía de un cierre; cualquier otro estado deja la expresión incompleta.
+    # p2 cierra el último nombre y p4 ya venía de un cierre; el resto queda incompleto.
     if estado == "p2":
         padres[-1].append({"nombre": actual, "hijos": []})
         estado = "p5"
@@ -468,10 +441,6 @@ def crear_arbol_en_disco(nodo: dict, padre: str) -> None:
     for hijo in nodo["hijos"]:
         crear_arbol_en_disco(hijo, ruta)
 
-
-# --------------------------------------------------------------------------
-# Sandbox y datos
-# --------------------------------------------------------------------------
 
 def ruta_sandbox(nombre: str) -> str:
     """Resuelve un nombre dentro del sandbox y bloquea escapes y datos internos.
@@ -545,10 +514,6 @@ def confirmar_accion(pregunta: str) -> bool:
     print("Operación cancelada.")
     return False
 
-
-# --------------------------------------------------------------------------
-# Semántica de las cinco acciones sobre las tres entidades
-# --------------------------------------------------------------------------
 
 def operar_usuario(accion: str, nombre: str) -> None:
     """Aplica una de las cinco acciones sobre el registro de usuarios.
@@ -654,7 +619,7 @@ def operar_archivo(accion: str, nombre: str, ruta: str) -> None:
             raise ErrorSemantico(f"no se pudo leer {nombre}: {error}") from error
         print(f"Contenido: {contenido!r}" if contenido else "Contenido: (vacío)")
         return
-    else:  # editar: agrega una línea con la marca de tiempo del cambio
+    else:
         if not existe:
             raise ErrorSemantico(f"no existe el archivo {nombre}")
         with open(ruta, "a", encoding="utf-8") as archivo:
@@ -740,8 +705,7 @@ def aplicar_accion(accion: str, entidad: str, parametro: str, arbol: dict | None
         print("Operación completada.")
         return
     ruta = ruta_sandbox(parametro)
-    # usuarios.json es dato interno: solo lectura. Cualquier acción que escriba
-    # falla cerrado y el store queda intacto.
+    # usuarios.json es dato interno: solo lectura, escribir falla cerrado.
     es_dato_interno = os.path.normpath(ruta) == os.path.normpath(USUARIOS)
     if es_dato_interno and accion not in ("buscar", "inspeccionar"):
         raise ErrorSemantico(f"{parametro} es un dato interno protegido")
@@ -749,10 +713,6 @@ def aplicar_accion(accion: str, entidad: str, parametro: str, arbol: dict | None
         return operar_archivo(accion, parametro, ruta)
     return operar_carpeta(accion, parametro, ruta)
 
-
-# --------------------------------------------------------------------------
-# Flujo de una línea: léxico -> AFD -> AP -> semántica -> ejecución
-# --------------------------------------------------------------------------
 
 def procesar_linea(linea: str) -> bool:
     """Procesa una línea completa y reporta su ruta por el grafo de estados.
