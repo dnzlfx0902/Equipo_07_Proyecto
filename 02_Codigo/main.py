@@ -36,7 +36,7 @@ AYUDA = {
     "crear": "crear usuario|archivo|carpeta NOMBRE  (carpeta admite Raiz(Sub1, Sub2(Sub3)))",
     "borrar": "borrar usuario|archivo|carpeta NOMBRE",
     "buscar": "buscar usuario|archivo|carpeta NOMBRE",
-    "inspeccionar": "inspeccionar usuario  |  inspeccionar usuario|archivo|carpeta NOMBRE",
+    "inspeccionar": "inspeccionar usuario|archivo|carpeta NOMBRE",
     "editar": "editar usuario|archivo|carpeta NOMBRE",
 }
 
@@ -51,14 +51,13 @@ TRANSICIONES = {
     ("D4", "p"): "D5",
     ("D6", "--help"): "D3",
     ("D6", "e"): "D4",
-    ("D6", "eu"): "D7",
-    ("D7", "p"): "D5",
+    ("D6", "eu"): "D4",
 }
-FINALES = ("D1", "D3", "D5", "D7")
+FINALES = ("D1", "D3", "D5")
 
 # AFN: δ(q0, a) y δ(q0, i) abren dos ramas; el AFD de arriba sale por subconjuntos.
 AFN_INICIAL = "q0"
-AFN_FINALES = frozenset({"q1", "q4", "q6", "q9"})
+AFN_FINALES = frozenset({"q1", "q4", "q6"})
 AFN = {
     ("q0", "help"): {"q1"},
     ("q0", "a"): {"q2", "q3"},
@@ -522,8 +521,9 @@ def operar_usuario(accion: str, nombre: str) -> None:
     elif accion == "inspeccionar":
         if not existe:
             raise ErrorSemantico(f"el usuario {nombre} no existe")
+        # Orden = índice en el registro vigente; no se leen datos legados ni se inventan fechas.
         print(f"Usuario: {nombre}")
-        print(f"Total de usuarios registrados: {len(usuarios)}")
+        print(f"Orden: {usuarios.index(nombre) + 1} de {len(usuarios)}")
         print(f"Archivo: {USUARIOS}")
         return
     else:  # editar: renombra con el sufijo _editado
@@ -536,21 +536,6 @@ def operar_usuario(accion: str, nombre: str) -> None:
         print(f"Usuario actualizado: {nombre} -> {nuevo}")
     guardar_usuarios(usuarios)
     print("Operación completada.")
-
-
-def listar_usuarios() -> None:
-    """Muestra los usuarios registrados sin pedir nombre (forma corta).
-
-    Raises:
-        ValueError: Si el store no contiene una lista de nombres.
-        OSError: Si el store no se puede leer.
-    """
-    usuarios = cargar_usuarios()
-    print(f"Usuarios registrados: {len(usuarios)}")
-    for usuario in usuarios:
-        print(f"  - {usuario}")
-    if not usuarios:
-        print("  (no hay usuarios registrados)")
 
 
 def operar_archivo(accion: str, nombre: str, ruta: str) -> None:
@@ -716,10 +701,6 @@ def procesar_linea(linea: str) -> None:
 
         if estado == "D3":
             print(f"Uso: {AYUDA[tokens[0]]}")
-            return
-
-        if estado == "D7":
-            listar_usuarios()
             return
 
         accion, entidad, parametro = tokens[0], tokens[1], tokens[2]
