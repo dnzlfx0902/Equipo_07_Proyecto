@@ -6,9 +6,11 @@ El programa recorre tres capas de la teoría de lenguajes formales:
    palabra pertenece a cada categoría, y el alfabeto Sigma se valida carácter a
    carácter junto con la separación por un único espacio.
 2. Sintáctico (AFD). Un autómata finito determinista explícito reconoce la
-   forma de los comandos simples: los estados D0..D7 acumulan prefijos válidos
+   forma de los comandos simples: los estados D0..D8 acumulan prefijos válidos
    y Dt es la trampa absorbente, de modo que una vez dentro ningún token
-   posterior permite salir.
+   posterior permite salir. Ese AFD se deriva del AFN declarado en ``AFN`` con
+   la construcción por subconjuntos (``construir_afd``), y al arrancar se
+   contrasta que ambos aceptan el mismo lenguaje (``verificar_automatas``).
 3. Sintáctico de jerarquías (AP). Un autómata de pila manual valida la forma
    ``Raiz(Sub1, Sub2(Sub3))``: empuja ``X`` al encontrar ``(``, la extrae con
    ``)`` y solo acepta por epsilon desde p5 con la pila en ``['Z0']``.
@@ -17,6 +19,7 @@ La semántica (QT2) aplica después los efectos reales. Todos ellos quedan
 confinados en ``entorno_windows/`` y los usuarios se guardan en ``usuarios.json``.
 """
 
+import itertools
 import json
 import os
 import re
@@ -33,6 +36,13 @@ ENTIDADES = ("usuario", "archivo", "carpeta")
 REGEX_ACCION = r"^(crear|borrar|buscar|inspeccionar|editar)$"
 REGEX_ENTIDAD = r"^(usuario|archivo|carpeta)$"
 REGEX_PARAMETRO = r"^[a-zA-Z0-9_.-]+$"
+# R4 del Doc: validación cruzada del sub-lenguaje simple. No cubre la forma
+# jerárquica ni la forma corta ``inspeccionar usuario`` (hueco H8 de la matriz),
+# así que se usa para contrastar AFD <-> regex, no para validar la entrada.
+REGEX_COMANDO_COMPLETO = (
+    r"^(help|salir|(crear|borrar|buscar|inspeccionar|editar) "
+    r"(--help|(usuario|archivo|carpeta) [a-zA-Z0-9_.-]+))$"
+)
 
 # Sigma se arma por partes para dejar visible qué caracteres lo componen.
 LETRAS = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ"
@@ -55,11 +65,13 @@ AYUDA = {
 
 # AFD: un estado por prefijo válido (D0 inicio, D1 "help", D2 "a",
 # D3 "a --help", D4 "a e", D5 "a e p", D6 "inspeccionar", D7 "inspeccionar
-# usuario"). Toda transición ausente cae en Dt, la trampa absorbente.
+# usuario", D8 "salir"). Toda transición ausente cae en Dt, la trampa
+# absorbente.
 TRANSICIONES = {
     ("D0", "help"): "D1",
     ("D0", "a"): "D2",
     ("D0", "i"): "D6",
+    ("D0", "s"): "D8",
     ("D2", "--help"): "D3",
     ("D2", "e"): "D4",
     ("D2", "eu"): "D4",
@@ -69,7 +81,31 @@ TRANSICIONES = {
     ("D6", "eu"): "D7",
     ("D7", "p"): "D5",
 }
-FINALES = ("D1", "D3", "D5", "D7")
+FINALES = ("D1", "D3", "D5", "D7", "D8")
+
+# AFN del lenguaje ampliado. Desde q0 la acción ``a`` y el verbo ``i`` abren dos
+# ramas simultáneas (ayuda y ejecución), así que δ(q0, a) y δ(q0, i) tienen dos
+# destinos: ese no determinismo real es lo que justifica el AFN. El AFD de
+# arriba es su construcción por subconjuntos, estado por subconjunto:
+# D0={q0}, D1={q1}, D2={q2,q3}, D3={q4}, D4={q5}, D5={q6}, D6={q7,q8},
+# D7={q9}, D8={q10}, Dt={}.
+AFN_INICIAL = "q0"
+AFN_FINALES = frozenset({"q1", "q4", "q6", "q9", "q10"})
+AFN = {
+    ("q0", "help"): {"q1"},
+    ("q0", "a"): {"q2", "q3"},
+    ("q0", "i"): {"q7", "q8"},
+    ("q0", "s"): {"q10"},
+    ("q2", "--help"): {"q4"},
+    ("q7", "--help"): {"q4"},
+    ("q3", "e"): {"q5"},
+    ("q3", "eu"): {"q5"},
+    ("q8", "e"): {"q5"},
+    ("q8", "eu"): {"q9"},
+    ("q5", "p"): {"q6"},
+    ("q9", "p"): {"q6"},
+}
+SIMBOLOS_AFD = ("help", "a", "i", "--help", "e", "eu", "p", "s")
 
 
 class ErrorLexico(Exception):
@@ -154,6 +190,8 @@ def simbolo_afd(posicion: int, campo: str, jerarquia: bool) -> str:
     if posicion == 0:
         if campo == "help":
             return "help"
+        if campo == "salir":
+            return "s"
         if campo == "inspeccionar":
             return "i"
         return "a" if re.match(REGEX_ACCION, campo) else "INVALIDO"
@@ -186,6 +224,89 @@ def recorrer_afd(simbolos: list[str]) -> tuple[str, list[str]]:
         estado = TRANSICIONES.get((estado, simbolo_actual), "Dt")
         recorrido.append(estado)
     return estado, recorrido
+
+
+def construir_afd() -> tuple[dict, frozenset, set]:
+    """Construye el AFD por subconjuntos a partir de ``AFN``.
+
+    El AFN no usa transiciones épsilon, así que el cierre-ε de cada subconjunto
+    es el subconjunto mismo y basta con propagar los destinos símbolo a símbolo.
+
+    Returns:
+        Tupla con las transiciones ``{(subconjunto, símbolo): subconjunto}``,
+        el subconjunto inicial y el conjunto de subconjuntos finales.
+    """
+    inicial = frozenset({AFN_INICIAL})
+    transiciones = {}
+    vistos = [inicial]
+    pendientes = [inicial]
+    while pendientes:
+        subconjunto = pendientes.pop()
+        for simbolo in SIMBOLOS_AFD:
+            destino = frozenset(
+                siguiente
+                for estado in subconjunto
+                for siguiente in AFN.get((estado, simbolo), ())
+            )
+            transiciones[(subconjunto, simbolo)] = destino
+            if destino and destino not in vistos:
+                vistos.append(destino)
+                pendientes.append(destino)
+    finales = {subconjunto for subconjunto in vistos if subconjunto & AFN_FINALES}
+    return transiciones, inicial, finales
+
+
+def verificar_automatas() -> None:
+    """Contrasta AFN, AFD construido y R4, y comprueba la alcanzabilidad.
+
+    Se ejecuta al arrancar: si el AFD explícito, el AFD construido por
+    subconjuntos y la regex R4 dejan de aceptar el mismo lenguaje, el programa
+    no atiende comandos.
+
+    Raises:
+        AssertionError: Si AFN y AFD discrepan en alguna cadena, si R4 no
+            coincide con el AFD en el sub-lenguaje simple o si algún estado
+            declarado del AFD es inalcanzable desde D0.
+    """
+    construidas, inicial, finales_construidos = construir_afd()
+    palabras = ("help", "salir", "crear", "inspeccionar", "usuario", "archivo",
+                "carpeta", "x1", "--help")
+    for largo in range(4):
+        for combinacion in itertools.product(palabras, repeat=largo):
+            simbolos = [simbolo_afd(i, campo, False) for i, campo in enumerate(combinacion)]
+            estado, _ = recorrer_afd(simbolos)
+            subconjunto = inicial
+            for simbolo in simbolos:
+                subconjunto = construidas.get((subconjunto, simbolo), frozenset())
+            assert (subconjunto in finales_construidos) == (estado in FINALES), combinacion
+    # R4 solo se define sobre el sub-lenguaje simple: sin paréntesis y sin la
+    # forma corta ``inspeccionar usuario`` (huecos H7/H8 de la matriz).
+    for linea in (
+        "help", "salir", "crear --help", "inspeccionar --help",
+        "crear usuario juan_perez", "buscar archivo reporte-2026.pdf",
+        "editar carpeta fotos", "inspeccionar archivo tarea1.txt",
+        "help crear", "crear usuario", "usuario crear pedro",
+        "crear --help usuario", "editar archivo mi archivo.txt",
+    ):
+        simbolos = [simbolo_afd(i, campo, False) for i, campo in enumerate(linea.split(" "))]
+        estado, _ = recorrer_afd(simbolos)
+        assert bool(re.match(REGEX_COMANDO_COMPLETO, linea)) == (estado in FINALES), linea
+    # AN1: los vértices son las transiciones reales del AFD; ningún estado
+    # declarado puede quedar inalcanzable desde D0.
+    alcanzables, pendientes = {"D0"}, ["D0"]
+    while pendientes:
+        actual = pendientes.pop()
+        for (origen, _simbolo), destino in TRANSICIONES.items():
+            if origen == actual and destino not in alcanzables:
+                alcanzables.add(destino)
+                pendientes.append(destino)
+    declarados = {"Dt"} | set(FINALES) | set(TRANSICIONES.values())
+    declarados |= {origen for origen, _simbolo in TRANSICIONES}
+    # Dt es alcanzable si algún estado vivo deja sin transición algún símbolo.
+    if any((estado, simbolo) not in TRANSICIONES
+           for estado in alcanzables for simbolo in SIMBOLOS_AFD):
+        alcanzables.add("Dt")
+    assert alcanzables == declarados, declarados - alcanzables
 
 
 # --------------------------------------------------------------------------
@@ -650,10 +771,6 @@ def procesar_linea(linea: str) -> bool:
         validar_alfabeto(linea)
         tokens = dividir_campos(linea)
         print(f"Tokens: {tokens}")
-        if tokens == ["salir"]:
-            print("Ruta: Q0 -> Q7")
-            print("Sesión finalizada.")
-            return False
 
         jerarquia = "(" in linea or ")" in linea
         simbolos = [simbolo_afd(i, campo, jerarquia) for i, campo in enumerate(tokens)]
@@ -663,6 +780,11 @@ def procesar_linea(linea: str) -> bool:
             if estado == "Dt":
                 print("Dt es la trampa absorbente: los tokens restantes se consumen sin salir de ella.")
             raise ErrorSintactico(f"la entrada queda en {estado}, que no es estado final")
+
+        if estado == "D8":
+            print("Ruta: Q0 -> Q7")
+            print("Sesión finalizada.")
+            return False
 
         if estado == "D1":
             ruta_grafo += ["Q1", "Q7"]
@@ -713,6 +835,7 @@ def procesar_linea(linea: str) -> bool:
 
 def main() -> None:
     """Bucle de lectura y evaluación hasta ``salir``, EOF o interrupción."""
+    verificar_automatas()
     print("Mini terminal teórica. Escribe help para ver los comandos.")
     while True:
         try:
