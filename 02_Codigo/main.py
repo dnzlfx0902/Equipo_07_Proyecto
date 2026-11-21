@@ -6,7 +6,7 @@ El programa recorre tres capas de la teoría de lenguajes formales:
    palabra pertenece a cada categoría, y el alfabeto Sigma se valida carácter a
    carácter junto con la separación por un único espacio.
 2. Sintáctico (AFD). Un autómata finito determinista explícito reconoce la
-   forma de los comandos simples: los estados D0..D8 acumulan prefijos válidos
+   forma de los comandos simples: los estados D0..D7 acumulan prefijos válidos
    y Dt es la trampa absorbente, de modo que una vez dentro ningún token
    posterior permite salir. Ese AFD se deriva del AFN declarado en ``AFN`` con
    la construcción por subconjuntos (``construir_afd``), y al arrancar se
@@ -37,7 +37,7 @@ REGEX_ENTIDAD = r"^(usuario|archivo|carpeta)$"
 REGEX_PARAMETRO = r"^[a-zA-Z0-9_.-]+$"
 # R4: validación cruzada del sub-lenguaje simple, no de la entrada.
 REGEX_COMANDO_COMPLETO = (
-    r"^(help|salir|(crear|borrar|buscar|inspeccionar|editar) "
+    r"^(help|(crear|borrar|buscar|inspeccionar|editar) "
     r"(--help|(usuario|archivo|carpeta) [a-zA-Z0-9_.-]+))$"
 )
 
@@ -49,7 +49,7 @@ ALFABETO = set(LETRAS + DIGITOS + SIGNOS_NOMBRE + "(), ")
 CARACTERES_NOMBRE = set(LETRAS + DIGITOS + SIGNOS_NOMBRE)
 
 # Palabras que nunca pueden usarse como parámetro: quedarían fuera del AFD.
-RESERVADAS = {"help", "--help", "salir"} | set(ACCIONES) | set(ENTIDADES)
+RESERVADAS = {"help", "--help"} | set(ACCIONES) | set(ENTIDADES)
 
 AYUDA = {
     "crear": "crear usuario|archivo|carpeta NOMBRE  (carpeta admite Raiz(Sub1, Sub2(Sub3)))",
@@ -57,7 +57,6 @@ AYUDA = {
     "buscar": "buscar usuario|archivo|carpeta NOMBRE",
     "inspeccionar": "inspeccionar usuario  |  inspeccionar usuario|archivo|carpeta NOMBRE",
     "editar": "editar usuario|archivo|carpeta NOMBRE",
-    "salir": "salir",
 }
 
 # AFD: un estado por prefijo válido; toda transición ausente cae en Dt, la trampa.
@@ -65,7 +64,6 @@ TRANSICIONES = {
     ("D0", "help"): "D1",
     ("D0", "a"): "D2",
     ("D0", "i"): "D6",
-    ("D0", "s"): "D8",
     ("D2", "--help"): "D3",
     ("D2", "e"): "D4",
     ("D2", "eu"): "D4",
@@ -75,16 +73,15 @@ TRANSICIONES = {
     ("D6", "eu"): "D7",
     ("D7", "p"): "D5",
 }
-FINALES = ("D1", "D3", "D5", "D7", "D8")
+FINALES = ("D1", "D3", "D5", "D7")
 
 # AFN: δ(q0, a) y δ(q0, i) abren dos ramas; el AFD de arriba sale por subconjuntos.
 AFN_INICIAL = "q0"
-AFN_FINALES = frozenset({"q1", "q4", "q6", "q9", "q10"})
+AFN_FINALES = frozenset({"q1", "q4", "q6", "q9"})
 AFN = {
     ("q0", "help"): {"q1"},
     ("q0", "a"): {"q2", "q3"},
     ("q0", "i"): {"q7", "q8"},
-    ("q0", "s"): {"q10"},
     ("q2", "--help"): {"q4"},
     ("q7", "--help"): {"q4"},
     ("q3", "e"): {"q5"},
@@ -94,7 +91,7 @@ AFN = {
     ("q5", "p"): {"q6"},
     ("q9", "p"): {"q6"},
 }
-SIMBOLOS_AFD = ("help", "a", "i", "--help", "e", "eu", "p", "s")
+SIMBOLOS_AFD = ("help", "a", "i", "--help", "e", "eu", "p")
 
 
 class ErrorLexico(Exception):
@@ -175,8 +172,6 @@ def simbolo_afd(posicion: int, campo: str, jerarquia: bool) -> str:
     if posicion == 0:
         if campo == "help":
             return "help"
-        if campo == "salir":
-            return "s"
         if campo == "inspeccionar":
             return "i"
         return "a" if re.match(REGEX_ACCION, campo) else "INVALIDO"
@@ -254,7 +249,7 @@ def verificar_automatas() -> None:
             declarado del AFD es inalcanzable desde D0.
     """
     construidas, inicial, finales_construidos = construir_afd()
-    palabras = ("help", "salir", "crear", "inspeccionar", "usuario", "archivo",
+    palabras = ("help", "crear", "inspeccionar", "usuario", "archivo",
                 "carpeta", "x1", "--help")
     for largo in range(4):
         for combinacion in itertools.product(palabras, repeat=largo):
@@ -266,7 +261,7 @@ def verificar_automatas() -> None:
             assert (subconjunto in finales_construidos) == (estado in FINALES), combinacion
     # R4 se contrasta con el AFD solo en el sub-lenguaje simple, sin paréntesis.
     for linea in (
-        "help", "salir", "crear --help", "inspeccionar --help",
+        "help", "crear --help", "inspeccionar --help",
         "crear usuario juan_perez", "buscar archivo reporte-2026.pdf",
         "editar carpeta fotos", "inspeccionar archivo tarea1.txt",
         "help crear", "crear usuario", "usuario crear pedro",
@@ -714,7 +709,7 @@ def aplicar_accion(accion: str, entidad: str, parametro: str, arbol: dict | None
     return operar_carpeta(accion, parametro, ruta)
 
 
-def procesar_linea(linea: str) -> bool:
+def procesar_linea(linea: str) -> None:
     """Procesa una línea completa y reporta su ruta por el grafo de estados.
 
     Las excepciones no se propagan: cada familia de error se traduce a la ruta
@@ -722,9 +717,6 @@ def procesar_linea(linea: str) -> bool:
 
     Args:
         linea: Línea leída de la consola.
-
-    Returns:
-        False cuando la línea pide cerrar la sesión; True en cualquier otro caso.
     """
     try:
         validar_alfabeto(linea)
@@ -739,22 +731,18 @@ def procesar_linea(linea: str) -> bool:
                 print("Dt es la trampa absorbente: los tokens restantes se consumen sin salir de ella.")
             raise ErrorSintactico(f"la entrada queda en {estado}, que no es estado final")
 
-        if estado == "D8":
-            print("Sesión finalizada.")
-            return False
-
         if estado == "D1":
             print(f"Acciones: {', '.join(ACCIONES)}")
-            print("Uso: ACCION --help   |   salir")
-            return True
+            print("Uso: ACCION --help")
+            return
 
         if estado == "D3":
             print(f"Uso: {AYUDA[tokens[0]]}")
-            return True
+            return
 
         if estado == "D7":
             listar_usuarios()
-            return True
+            return
 
         accion, entidad, parametro = tokens[0], tokens[1], tokens[2]
         if jerarquia:
@@ -770,17 +758,15 @@ def procesar_linea(linea: str) -> bool:
         print(f"Error semántico (QT2): {error}")
     except (OSError, ValueError) as error:
         print(f"Error de datos (QT2): {error}")
-    return True
 
 
 def main() -> None:
-    """Bucle de lectura y evaluación hasta ``salir``, EOF o interrupción."""
+    """Bucle de lectura y evaluación hasta EOF o interrupción."""
     verificar_automatas()
     print("Bienvenido a la terminal, escribe help para ver comandos")
     while True:
         try:
-            if not procesar_linea(input("> ")):
-                break
+            procesar_linea(input("> "))
         except (EOFError, KeyboardInterrupt):
             print("\nHasta luego.")
             break
