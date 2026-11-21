@@ -726,7 +726,6 @@ def procesar_linea(linea: str) -> bool:
     Returns:
         False cuando la línea pide cerrar la sesión; True en cualquier otro caso.
     """
-    ruta_grafo = ["Q0"]
     try:
         validar_alfabeto(linea)
         tokens = dividir_campos(linea)
@@ -734,61 +733,42 @@ def procesar_linea(linea: str) -> bool:
 
         jerarquia = "(" in linea or ")" in linea
         simbolos = [simbolo_afd(i, campo, jerarquia) for i, campo in enumerate(tokens)]
-        estado, recorrido = recorrer_afd(simbolos)
-        print(f"Recorrido AFD: {' -> '.join(recorrido)}")
+        estado, _ = recorrer_afd(simbolos)
         if estado not in FINALES:
             if estado == "Dt":
                 print("Dt es la trampa absorbente: los tokens restantes se consumen sin salir de ella.")
             raise ErrorSintactico(f"la entrada queda en {estado}, que no es estado final")
 
         if estado == "D8":
-            print("Ruta: Q0 -> Q7")
             print("Sesión finalizada.")
             return False
 
         if estado == "D1":
-            ruta_grafo += ["Q1", "Q7"]
             print(f"Acciones: {', '.join(ACCIONES)}")
             print("Uso: ACCION --help   |   salir")
-            print(f"Ruta: {' -> '.join(ruta_grafo)}")
             return True
 
         if estado == "D3":
-            ruta_grafo += ["Q2", "Q3", "Q7"]
             print(f"Uso: {AYUDA[tokens[0]]}")
-            print(f"Ruta: {' -> '.join(ruta_grafo)}")
             return True
 
         if estado == "D7":
-            ruta_grafo += ["Q2", "Q3", "Q4", "Q5", "Q6"]
             listar_usuarios()
-            ruta_grafo.append("Q7")
-            print(f"Ruta: {' -> '.join(ruta_grafo)}")
             return True
 
         accion, entidad, parametro = tokens[0], tokens[1], tokens[2]
-        ruta_grafo += ["Q2", "Q3", "Q4"]
         if jerarquia:
             if accion != "crear" or entidad != "carpeta":
                 raise ErrorSintactico("la forma jerárquica solo aplica a crear carpeta")
             arbol = validar_jerarquia_ap(parametro)
         else:
             arbol = None
-        ruta_grafo += ["Q5", "Q6"]
         aplicar_accion(accion, entidad, parametro, arbol)
-        ruta_grafo.append("Q7")
-        print(f"Ruta: {' -> '.join(ruta_grafo)}")
     except (ErrorLexico, ErrorSintactico) as error:
-        ruta_grafo.append("QT1")
-        print(f"Ruta: {' -> '.join(ruta_grafo)}")
         print(f"Error léxico/sintáctico (QT1): {error}")
     except ErrorSemantico as error:
-        ruta_grafo.append("QT2")
-        print(f"Ruta: {' -> '.join(ruta_grafo)}")
         print(f"Error semántico (QT2): {error}")
     except (OSError, ValueError) as error:
-        ruta_grafo.append("QT2")
-        print(f"Ruta: {' -> '.join(ruta_grafo)}")
         print(f"Error de datos (QT2): {error}")
     return True
 
@@ -796,7 +776,7 @@ def procesar_linea(linea: str) -> bool:
 def main() -> None:
     """Bucle de lectura y evaluación hasta ``salir``, EOF o interrupción."""
     verificar_automatas()
-    print("Mini terminal teórica. Escribe help para ver los comandos.")
+    print("Bienvenido a la terminal, escribe help para ver comandos")
     while True:
         try:
             if not procesar_linea(input("> ")):
