@@ -32,7 +32,6 @@ USUARIOS = os.path.join(SANDBOX, "usuarios.json")
 ACCIONES = ("crear", "borrar", "buscar", "inspeccionar", "editar")
 ENTIDADES = ("usuario", "archivo", "carpeta")
 
-# Las tres expresiones regulares del analizador léxico.
 REGEX_ACCION = r"^(crear|borrar|buscar|inspeccionar|editar)$"
 REGEX_ENTIDAD = r"^(usuario|archivo|carpeta)$"
 REGEX_PARAMETRO = r"^[a-zA-Z0-9_.-]+$"
@@ -119,10 +118,6 @@ class ErrorSintactico(Exception):
 class ErrorSemantico(Exception):
     """El comando es válido, pero el estado del sandbox no lo permite."""
 
-
-# --------------------------------------------------------------------------
-# Entrada: alfabeto, separación y tokens
-# --------------------------------------------------------------------------
 
 def validar_alfabeto(linea: str) -> None:
     """Comprueba que la línea pertenezca a Sigma* con un único espacio separador.
@@ -309,10 +304,6 @@ def verificar_automatas() -> None:
     assert alcanzables == declarados, declarados - alcanzables
 
 
-# --------------------------------------------------------------------------
-# Autómata de pila para crear carpeta Raiz(Sub1, Sub2(Sub3))
-# --------------------------------------------------------------------------
-
 def cerrar_grupo_ap(pila: list[str], padres: list[list]) -> None:
     """Aplica la transición de cierre ``)`` del AP.
 
@@ -370,7 +361,6 @@ def validar_jerarquia_ap(expresion: str) -> dict:
                     f"carácter {caracter!r} inesperado en p0: falta el nombre raíz"
                 )
         elif estado == "p1":
-            # Tras '(' se exige al menos un carácter de nombre por grupo.
             if caracter in CARACTERES_NOMBRE:
                 actual = caracter
                 estado = "p2"
@@ -400,8 +390,6 @@ def validar_jerarquia_ap(expresion: str) -> dict:
             else:
                 raise ErrorSintactico(f"carácter {caracter!r} inesperado dentro de un nombre")
         elif estado == "p3":
-            # Tras la coma se admite el espacio de formato y luego un nombre;
-            # un cierre inmediato equivale a un elemento vacío.
             if caracter == " " and expresion[posicion - 1] == ",":
                 pass
             elif caracter in CARACTERES_NOMBRE:
@@ -409,7 +397,7 @@ def validar_jerarquia_ap(expresion: str) -> dict:
                 estado = "p2"
             else:
                 raise ErrorSintactico(f"elemento vacío tras la coma y llegó {caracter!r}")
-        else:  # p4: se acaba de cerrar un grupo
+        else:
             if caracter == ")":
                 cerrar_grupo_ap(pila, padres)
             elif caracter == ",":
@@ -468,10 +456,6 @@ def crear_arbol_en_disco(nodo: dict, padre: str) -> None:
     for hijo in nodo["hijos"]:
         crear_arbol_en_disco(hijo, ruta)
 
-
-# --------------------------------------------------------------------------
-# Sandbox y datos
-# --------------------------------------------------------------------------
 
 def ruta_sandbox(nombre: str) -> str:
     """Resuelve un nombre dentro del sandbox y bloquea escapes y datos internos.
@@ -545,10 +529,6 @@ def confirmar_accion(pregunta: str) -> bool:
     print("Operación cancelada.")
     return False
 
-
-# --------------------------------------------------------------------------
-# Semántica de las cinco acciones sobre las tres entidades
-# --------------------------------------------------------------------------
 
 def operar_usuario(accion: str, nombre: str) -> None:
     """Aplica una de las cinco acciones sobre el registro de usuarios.
@@ -654,7 +634,7 @@ def operar_archivo(accion: str, nombre: str, ruta: str) -> None:
             raise ErrorSemantico(f"no se pudo leer {nombre}: {error}") from error
         print(f"Contenido: {contenido!r}" if contenido else "Contenido: (vacío)")
         return
-    else:  # editar: agrega una línea con la marca de tiempo del cambio
+    else:
         if not existe:
             raise ErrorSemantico(f"no existe el archivo {nombre}")
         with open(ruta, "a", encoding="utf-8") as archivo:
@@ -749,10 +729,6 @@ def aplicar_accion(accion: str, entidad: str, parametro: str, arbol: dict | None
         return operar_archivo(accion, parametro, ruta)
     return operar_carpeta(accion, parametro, ruta)
 
-
-# --------------------------------------------------------------------------
-# Flujo de una línea: léxico -> AFD -> AP -> semántica -> ejecución
-# --------------------------------------------------------------------------
 
 def procesar_linea(linea: str) -> bool:
     """Procesa una línea completa y reporta su ruta por el grafo de estados.
